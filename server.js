@@ -3,25 +3,38 @@ const express = require('express')
 const cors = require('cors')
 const axios = require('axios')
 const jwt = require('jsonwebtoken')
-const fs = require('fs')
-const path = require('path')
+const mongoose = require('mongoose')
 
 const app = express()
 app.use(cors())
 app.use(express.json())
 
-const COURSES_PATH = path.join(__dirname, 'courses.json')
+// ===== MongoDB 連線 =====
+mongoose.connect(process.env.MONGODB_URI)
+  .then(() => console.log('MongoDB 連線成功'))
+  .catch(err => console.error('MongoDB 連線失敗', err))
 
-// ===== 工具函式 =====
-function readCourses() {
-  const raw = fs.readFileSync(COURSES_PATH, 'utf-8')
-  return JSON.parse(raw).courses
-}
+// ===== Course Schema =====
+const courseSchema = new mongoose.Schema({
+  title:     { type: String, required: true },
+  date:      { type: String },
+  dateValue: { type: String },
+  time:      { type: String },
+  rest:      { type: String },
+  location:  { type: String },
+  summary:   { type: String },
+  blocks:    [
+    {
+      title: String,
+      items: [String]
+    }
+  ],
+  createdAt: { type: Date, default: Date.now }
+})
 
-function writeCourses(courses) {
-  fs.writeFileSync(COURSES_PATH, JSON.stringify({ courses }, null, 2))
-}
+const Course = mongoose.model('Course', courseSchema)
 
+// ===== JWT 驗證 =====
 function verifyToken(req, res, next) {
   const auth = req.headers.authorization
   if (!auth || !auth.startsWith('Bearer ')) {
@@ -36,7 +49,7 @@ function verifyToken(req, res, next) {
   }
 }
 
-// ===== 聯絡表單 API(現有) =====
+// ===== 聯絡表單 API =====
 app.post('/api/contact', async (req, res) => {
   const { name, contact, topic, time } = req.body
 
@@ -74,9 +87,9 @@ app.post('/api/contact', async (req, res) => {
 })
 
 // ===== 前台 API =====
-app.get('/api/courses', (req, res) => {
+app.get('/api/courses', async (req, res) => {
   try {
-    const courses = readCourses()
+    const courses = await Course.find().sort({ dateValue: 1 })
     res.json({ success: true, courses })
   } catch {
     res.status(500).json({ success: false, message: '讀取失敗' })
@@ -93,54 +106,43 @@ app.post('/api/admin/login', (req, res) => {
   res.json({ success: true, token })
 })
 
-app.get('/api/admin/courses', verifyToken, (req, res) => {
+app.get('/api/admin/courses', verifyToken, async (req, res) => {
   try {
-    const courses = readCourses()
+    const courses = await Course.find().sort({ dateValue: 1 })
     res.json({ success: true, courses })
   } catch {
     res.status(500).json({ success: false, message: '讀取失敗' })
   }
 })
 
-app.post('/api/admin/courses', verifyToken, (req, res) => {
+app.post('/api/admin/courses', verifyToken, async (req, res) => {
   try {
-    const courses = readCourses()
-    const newCourse = {
-      id: Date.now().toString(),
-      ...req.body,
-      createdAt: new Date().toISOString()
-    }
-    courses.push(newCourse)
-    writeCourses(courses)
-    res.json({ success: true, course: newCourse })
+    const course = new Course(req.body)
+    await course.save()
+    res.json({ success: true, course })
   } catch {
     res.status(500).json({ success: false, message: '新增失敗' })
   }
 })
 
-app.put('/api/admin/courses/:id', verifyToken, (req, res) => {
+app.put('/api/admin/courses/:id', verifyToken, async (req, res) => {
   try {
-    const courses = readCourses()
-    const index = courses.findIndex(c => c.id === req.params.id)
-    if (index === -1) {
-      return res.status(404).json({ success: false, message: '找不到此課程' })
-    }
-    courses[index] = { ...courses[index], ...req.body }
-    writeCourses(courses)
-    res.json({ success: true, course: courses[index] })
+    const course = await Course.findByIdAndUpdate(
+      req.params.id,
+      req.body,
+      { new: true }
+    )
+    if (!course) return res.status(404).json({ success: false, message: '找不到此課程' })
+    res.json({ success: true, course })
   } catch {
     res.status(500).json({ success: false, message: '更新失敗' })
   }
 })
 
-app.delete('/api/admin/courses/:id', verifyToken, (req, res) => {
+app.delete('/api/admin/courses/:id', verifyToken, async (req, res) => {
   try {
-    const courses = readCourses()
-    const filtered = courses.filter(c => c.id !== req.params.id)
-    if (filtered.length === courses.length) {
-      return res.status(404).json({ success: false, message: '找不到此課程' })
-    }
-    writeCourses(filtered)
+    const course = await Course.findByIdAndDelete(req.params.id)
+    if (!course) return res.status(404).json({ success: false, message: '找不到此課程' })
     res.json({ success: true })
   } catch {
     res.status(500).json({ success: false, message: '刪除失敗' })
